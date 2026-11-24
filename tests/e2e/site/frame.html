@@ -1,0 +1,28 @@
+<!doctype html>
+<title>Frame Host</title>
+<p>a page whose media lives in an iframe</p>
+<script>
+// mode=remove takes the iframe out of the page; mode=nav sends it to a page without media.
+const q = new URLSearchParams(location.search);
+const mode = q.get('mode') || 'remove';
+const who = q.get('who') || 'frame';
+const t = q.get('t') || 'Embed';
+const frame = document.createElement('iframe');
+frame.src = '/embed.html?t=' + encodeURIComponent(t);
+frame.width = 320;
+frame.height = 180;
+document.body.append(frame);
+
+async function poll() {
+  try {
+    const r = await fetch('/cmd?who=' + encodeURIComponent(who), { cache: 'no-store' });
+    if (r.status === 200) {
+      const cmd = await r.text();
+      if (cmd === 'remove-frame') frame.remove();
+      if (cmd === 'navigate-frame') frame.src = '/plain.html';
+    }
+  } catch (e) {}
+  setTimeout(poll, 300);
+}
+poll();
+</script>

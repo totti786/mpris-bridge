@@ -90,6 +90,7 @@ impl State {
 struct Changes {
     status: bool,
     metadata: bool,
+    identity: bool,
     rate: bool,
     volume: bool,
     can_next: bool,
@@ -141,6 +142,7 @@ fn apply(state: &mut State, msg: &Json) -> Changes {
         || state.art_url != before.art_url
         || state.url != before.url
         || state.length_us != before.length_us;
+    c.identity = state.title != before.title;
     c.rate = state.rate != before.rate;
     c.volume = state.volume != before.volume;
     c.can_next = state.can_next != before.can_next;
@@ -157,9 +159,17 @@ fn owned<'a>(v: impl Into<Value<'a>>) -> OwnedValue {
     OwnedValue::try_from(v.into()).unwrap_or_else(|_| OwnedValue::from(0u8))
 }
 
+fn read<T>(state: &Arc<Mutex<State>>, f: impl FnOnce(&State) -> T) -> T {
+    match state.lock() {
+        Ok(s) => f(&s),
+        Err(poisoned) => f(&poisoned.into_inner()),
+    }
+}
+
 struct Root {
     tab: i64,
     out: Out,
+    state: Arc<Mutex<State>>,
 }
 
 #[interface(name = "org.mpris.MediaPlayer2")]
@@ -175,8 +185,13 @@ impl Root {
     fn can_raise(&self) -> bool { true }
     #[zbus(property)]
     fn has_track_list(&self) -> bool { false }
+    /// Which tab this player is, so several players are told apart in a panel's list
     #[zbus(property)]
-    fn identity(&self) -> String { "Firefox".into() }
+    fn identity(&self) -> String {
+        read(&self.state, |s| {
+            if s.title.is_empty() { "Firefox".to_owned() } else { format!("Firefox — {}", s.title) }
+        })
+    }
     #[zbus(property)]
     fn desktop_entry(&self) -> String { "firefox".into() }
     #[zbus(property)]
@@ -193,10 +208,7 @@ struct Player {
 
 impl Player {
     fn with<T>(&self, f: impl FnOnce(&State) -> T) -> T {
-        match self.state.lock() {
-            Ok(s) => f(&s),
-            Err(poisoned) => f(&poisoned.into_inner()),
-        }
+        read(&self.state, f)
     }
     fn cmd(&self, cmd: &str, value: Json) {
         send(&self.out, self.tab, cmd, value);
@@ -212,7 +224,13 @@ impl Player {
     fn stop(&self) { self.cmd("Stop", Json::Null) }
     fn play(&self) { self.cmd("Play", Json::Null) }
     fn seek(&self, offset: i64) { self.cmd("Seek", json!(offset)) }
-    fn set_position(&self, _track_id: ObjectPath<'_>, position: i64) { self.cmd("SetPosition", json!(position)) }
+    /// A position for a track that is no longer current is stale, and the spec says to ignore it
+    fn set_position(&self, track_id: ObjectPath<'_>, position: i64) {
+        let expected = format!("/org/mpris_bridge/t{}/n{}", self.tab, self.with(|s| s.serial));
+        if track_id.as_str() == expected {
+            self.cmd("SetPosition", json!(position));
+        }
+    }
     fn open_uri(&self, _uri: String) {}
 
     #[zbus(signal)]
@@ -296,7 +314,7 @@ async fn open_tab(tab: i64, out: &Out) -> zbus::Result<Tab> {
     let state = Arc::new(Mutex::new(State::new()));
     let conn = connection::Builder::session()?
         .name(format!("org.mpris.MediaPlayer2.firefox_bridge.p{}t{}", std::process::id(), tab))?
-        .serve_at(PATH, Root { tab, out: out.clone() })?
+        .serve_at(PATH, Root { tab, out: out.clone(), state: state.clone() })?
         .serve_at(PATH, Player { tab, out: out.clone(), state: state.clone() })?
         .build()
         .await?;
@@ -309,6 +327,10 @@ async fn announce(tab: &Tab, c: Changes) -> zbus::Result<()> {
     let ctx = iface.signal_emitter();
     if c.status { player.playback_status_changed(ctx).await?; }
     if c.metadata { player.metadata_changed(ctx).await?; }
+    if c.identity {
+        let root = tab.conn.object_server().interface::<_, Root>(PATH).await?;
+        root.get().await.identity_changed(root.signal_emitter()).await?;
+    }
     if c.rate { player.rate_changed(ctx).await?; }
     if c.volume { player.volume_changed(ctx).await?; }
     if c.can_next { player.can_go_next_changed(ctx).await?; }

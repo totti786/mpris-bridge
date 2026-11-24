@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "MPRIS Bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shows media playing in your tabs to the Linux desktop (media keys, panels, playerctl) as MPRIS players, with art, seeking and next/previous. Needs the small mpris-bridge helper.",
   "icons": {
     "48": "icons/icon-48.png",
@@ -10,23 +10,34 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "mpris-bridge@totti786.github.io",
-      "strict_min_version": "140.0",
+      "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": [
           "none"
         ]
       }
-    },
-    "gecko_android": {
-      "strict_min_version": "142.0"
     }
   },
   "permissions": [
     "nativeMessaging",
-    "tabs"
+    "tabs",
+    "storage"
   ],
+  "browser_action": {
+    "default_title": "MPRIS Bridge",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "scripts": [
+      "common.js",
       "background.js"
     ],
     "persistent": true
@@ -37,6 +48,7 @@
         "<all_urls>"
       ],
       "js": [
+        "common.js",
         "content.js"
       ],
       "run_at": "document_start",

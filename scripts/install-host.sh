@@ -17,7 +17,8 @@ done
 
 if [ "${1:-}" = "--remove" ]; then
   for t in "${targets[@]}"; do rm -f "$t/$name.json"; done
-  rm -rf "$lib"
+  # Only a genuine copy of the helper: an unrelated directory of the same name stays
+  if [ -x "$lib/mpris-bridge-host" ]; then rm -rf "$lib"; fi
   echo "removed"
   exit 0
 fi

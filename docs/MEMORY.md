@@ -25,7 +25,10 @@ Firefox's processes share twice. Numbers are from one machine (Firefox 159, Linu
 - A page without media does no work: the once-a-second poll starts at the first media event and stops when the media is gone.
 - Messages are sent only when something changed, plus a position sync every 5 seconds while playing; the helper extrapolates the
   position in between.
-- Nothing is read from or written to storage, and no timers run in the background page.
+- The ignore list is a few bytes read once per document (and again only when it changes); an ignored page publishes nothing and
+  stops its once-a-second poll.
+- Nothing is read from or written to storage apart from that list, and the background page's one timer is a 5-second sweep that
+  drops frames which stopped reporting.
 
 ## Not reduced, on purpose
 

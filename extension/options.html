@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPRIS Bridge settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+  <main>
+    <h1>Ignored sites</h1>
+    <p class="hint">
+      Media on these sites is not published to the desktop. Subdomains are included, so
+      <code>example.com</code> also covers <code>music.example.com</code>. The toolbar button ignores the
+      site you are on.
+    </p>
+
+    <form id="add">
+      <label for="host">Add a site</label>
+      <div class="row">
+        <input id="host" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+        <button type="submit">Add</button>
+      </div>
+      <p id="error" class="error" role="alert"></p>
+    </form>
+
+    <p id="empty" class="empty" hidden>No sites are ignored.</p>
+    <ul id="list"></ul>
+  </main>
+  <script src="common.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

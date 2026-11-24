@@ -4,7 +4,8 @@ pages, and this script talks to the resulting players over D-Bus as a desktop wo
 
   make e2e          (needs firefox, node/npx for web-ext, ffmpeg, a session bus and the built helper)
 
-Exits non-zero on the first failed expectation. Prints the memory the processes involved use.
+Registers the built helper for the current Firefox-family browser for the duration of the run (restoring any
+manifest it found), exits non-zero on the first failed expectation, and prints the memory the processes use.
 """
 import http.server
 import json
@@ -28,6 +29,14 @@ PREFIX = "org.mpris.MediaPlayer2.firefox_bridge."
 PLAYER = "org.mpris.MediaPlayer2.Player"
 ROOTIF = "org.mpris.MediaPlayer2"
 LOG = []
+COMMANDS = {}  # who -> [command, ...], fetched by the pages themselves
+HOST_BIN = os.path.join(ROOT, "host", "target", "release", "mpris-bridge-host")
+HOST_MANIFEST = os.path.expanduser("~/.mozilla/native-messaging-hosts/mpris_bridge.json")
+EXT_ID = "mpris-bridge@totti786.github.io"
+
+
+def command(who, cmd):
+    COMMANDS.setdefault(who, []).append(cmd)
 
 
 class Site(http.server.SimpleHTTPRequestHandler):
@@ -41,6 +50,20 @@ class Site(http.server.SimpleHTTPRequestHandler):
             LOG.append((q.get("k", [""])[0], q.get("v", [""])[0]))
             self.send_response(204)
             self.end_headers()
+            return
+        if url.path == "/cmd":
+            who = urllib.parse.parse_qs(url.query).get("who", [""])[0]
+            queue = COMMANDS.get(who) or []
+            if queue:
+                body = queue.pop(0).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(204)
+                self.end_headers()
             return
         super().do_GET()
 
@@ -107,6 +130,41 @@ def rss(pid):
 
 
 proc = None
+host_backup = None
+host_restored = False
+
+
+def register_host():
+    """Firefox reads native-messaging manifests from the home directory, not from a throwaway profile.
+
+    Returns the previous manifest contents, or None if there was none; cleanup() puts them back.
+    """
+    if not os.path.exists(HOST_BIN):
+        raise SystemExit("build the helper first: make build")
+    os.makedirs(os.path.dirname(HOST_MANIFEST), exist_ok=True)
+    previous = None
+    if os.path.exists(HOST_MANIFEST):
+        with open(HOST_MANIFEST) as f:
+            previous = f.read()
+    with open(HOST_MANIFEST, "w") as f:
+        json.dump({"name": "mpris_bridge", "description": "MPRIS Bridge helper (end-to-end test)",
+                   "path": HOST_BIN, "type": "stdio", "allowed_extensions": [EXT_ID]}, f, indent=2)
+    return previous
+
+
+def restore_host():
+    global host_restored
+    if host_restored or host_backup is None and not os.path.exists(HOST_MANIFEST):
+        return
+    host_restored = True
+    if host_backup is None:
+        try:
+            os.unlink(HOST_MANIFEST)
+        except OSError:
+            pass
+    else:
+        with open(HOST_MANIFEST, "w") as f:
+            f.write(host_backup)
 
 
 def cleanup(code=0):
@@ -116,6 +174,7 @@ def cleanup(code=0):
             proc.wait(10)
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
+    restore_host()
     return code or (1 if failures else 0)
 
 
@@ -134,7 +193,8 @@ def children(pid_root):
 
 
 def main():
-    global proc
+    global proc, host_backup
+    host_backup = register_host()
     tone = os.path.join(SITE, "tone.ogg")
     if not os.path.exists(tone):
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300",
@@ -148,17 +208,23 @@ def main():
          os.environ.get("FIREFOX", "firefox"), "--arg=-headless", "--no-input", "--no-reload", "--no-config-discovery",
          "--pref", "media.autoplay.default=0", "--pref", "media.autoplay.blocking_policy=0",
          "--pref", "media.block-autoplay-until-in-foreground=false",
-         "--start-url", base + "/a.html", "--start-url", base + "/b.html"],
+         "--pref", "media.cubeb.force_null_context=true",  # no sound card needed (CI), playback still advances
+         "--start-url", base + "/a.html", "--start-url", base + "/b.html",
+         "--start-url", base + "/frame.html?who=remove&mode=remove&t=Embed Removed",
+         "--start-url", base + "/frame.html?who=nav&mode=nav&t=Embed Nav"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
     time.sleep(5)
-    found = wait("both pages to appear as players", lambda: (lambda p: p if len(p) >= 2 else None)(players()), 90)
+    wanted = {"Tone A", "Plain Page", "Embed Removed", "Embed Nav"}
+    found = wait("every page to appear as a player",
+                 lambda: (lambda p: p if wanted <= set(p) else None)(players()), 120)
     print("players:", {t: n.split(".")[-1] for t, n in found.items()}, "log:", LOG[:6])
     a = found.get("Tone A")
     b = found.get("Plain Page")
     check("page A published under its MediaSession title", a is not None, list(found))
     check("page B title cleaned of '(3)' and ' - YouTube'", b is not None, list(found))
-    if not (a and b):
+    check("a page's iframe is published as a player too", "Embed Removed" in found, list(found))
+    if not (a and b and "Embed Removed" in found and "Embed Nav" in found):
         raise SystemExit(cleanup(1))
 
     wait("A to play", lambda: get(a, "PlaybackStatus") == "Playing", 15)
@@ -182,7 +248,8 @@ def main():
     check("Pause went through the page's own handler", ("handler", "pause") in LOG, LOG[-5:])
     call(a, PLAYER, "Play")
     wait("play to take effect", lambda: get(a, "PlaybackStatus") == "Playing", 10)
-    call(a, PLAYER, "SetPosition", GLib.Variant("(ox)", ("/x", 120_000_000)))
+    track = get(a, "Metadata")["mpris:trackid"]
+    call(a, PLAYER, "SetPosition", GLib.Variant("(ox)", (track, 120_000_000)))
     wait("seek to be seen by the page", lambda: ("seeked", "120") in LOG, 10)
     pos = wait("position near 120s", lambda: (lambda p: p if 119e6 < p < 126e6 else None)(get(a, "Position")), 10)
     check("SetPosition lands", True)
@@ -206,9 +273,23 @@ def main():
     wait("rate", lambda: ("rate", "1.5") in LOG, 10)
     check("Rate is applied", True)
 
-    # The page changes its own metadata: the player follows, with a new track id
+    # The page changes its own metadata, with no media event to announce it: the player follows, with a new track id
     before = get(a, "Metadata")["mpris:trackid"]
-    subprocess.run(["true"])
+    command("tone", "next")
+    wait("a page's own metadata change to arrive", lambda: get(a, "Metadata").get("xesam:title") == "Tone B", 10)
+    title = get(a, "Metadata").get("xesam:title")
+    after = get(a, "Metadata")["mpris:trackid"]
+    check("a page's own metadata change is picked up", title == "Tone B", title)
+    check("the new track got a new track id", after != before, (before, after))
+
+    # A frame that goes away must take its player with it: one is removed from the DOM (no event at
+    # all, caught by the background's staleness sweep), the other is navigated away (pagehide).
+    command("remove", "remove-frame")
+    command("nav", "navigate-frame")
+    wait("the removed iframe's player to go", lambda: "Embed Removed" not in players(), 40)
+    check("a removed iframe loses its player", True)
+    wait("the navigated iframe's player to go", lambda: "Embed Nav" not in players(), 15)
+    check("a navigated iframe loses its player", True)
     return a, b, before
 
 

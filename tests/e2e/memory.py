@@ -89,7 +89,8 @@ urls = [base + "/b.html"] + [base + "/plain.html?n=%d" % i for i in range(tabs -
 src = os.path.join(ROOT, "extension") if mode == "ext" else os.path.join(os.path.dirname(__file__), "baseline-ext")
 args = ["npx", "--yes", "web-ext", "run", "--source-dir", src, "--firefox", os.environ.get("FIREFOX", "firefox"),
         "--arg=-headless", "--no-input", "--no-reload", "--no-config-discovery",
-        "--pref", "media.autoplay.default=0", "--pref", "media.autoplay.blocking_policy=0"]
+        "--pref", "media.autoplay.default=0", "--pref", "media.autoplay.blocking_policy=0",
+        "--pref", "media.cubeb.force_null_context=true"]
 for u in urls:
     args += ["--start-url", u]
 proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

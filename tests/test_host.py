@@ -22,6 +22,7 @@ HOST = os.environ.get("MPRIS_BRIDGE_HOST") or os.path.join(os.path.dirname(__fil
 HOST_CMD = [HOST]
 PREFIX = "org.mpris.MediaPlayer2.firefox_bridge."
 PLAYER = "org.mpris.MediaPlayer2.Player"
+ROOT_IFACE = "org.mpris.MediaPlayer2"
 
 
 def tab_state(**over):
@@ -66,9 +67,9 @@ class HostTest(unittest.TestCase):
             time.sleep(0.1)
         self.fail("player never appeared")
 
-    def get(self, name, prop):
+    def get(self, name, prop, iface=PLAYER):
         reply = self.bus.call_sync(name, "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
-                                   GLib.Variant("(ss)", (PLAYER, prop)), None, Gio.DBusCallFlags.NONE, -1, None)
+                                   GLib.Variant("(ss)", (iface, prop)), None, Gio.DBusCallFlags.NONE, -1, None)
         return reply.unpack()[0]
 
     def metadata_types(self, name):
@@ -97,6 +98,7 @@ class HostTest(unittest.TestCase):
         self.assertEqual(types["xesam:title"], "s")
         self.assertEqual(types["mpris:artUrl"], "s")
         self.assertEqual(self.get(name, "PlaybackStatus"), "Playing")
+        self.assertEqual(self.get(name, "Identity", ROOT_IFACE), "Firefox — Video")  # tabs told apart in a panel
         self.assertTrue(self.get(name, "CanGoNext"))
         self.assertFalse(self.get(name, "CanGoPrevious"))
         self.assertGreaterEqual(self.get(name, "Position"), 5_000_000)
@@ -121,7 +123,10 @@ class HostTest(unittest.TestCase):
         name = self.wait_name()
         self.call(name, "PlayPause")
         self.assertEqual(self.rx(), {"tab": 7, "cmd": "PlayPause", "value": None})
-        self.call(name, "SetPosition", GLib.Variant("(ox)", ("/x", 30_000_000)))
+        track = self.get(name, "Metadata")["mpris:trackid"]
+        # A position for a track that is no longer current must be dropped, not acted on
+        self.call(name, "SetPosition", GLib.Variant("(ox)", ("/org/mpris_bridge/t7/n999", 10_000_000)))
+        self.call(name, "SetPosition", GLib.Variant("(ox)", (track, 30_000_000)))
         self.assertEqual(self.rx(), {"tab": 7, "cmd": "SetPosition", "value": 30_000_000})
         self.call(name, "Seek", GLib.Variant("(x)", (-5_000_000,)))
         self.assertEqual(self.rx(), {"tab": 7, "cmd": "Seek", "value": -5_000_000})
@@ -146,6 +151,7 @@ class HostTest(unittest.TestCase):
         self.tx(tab_state(title="Other", url="https://example.com/other"))
         time.sleep(0.3)
         self.assertNotEqual(self.get(name, "Metadata")["mpris:trackid"], first)
+        self.assertEqual(self.get(name, "Identity", ROOT_IFACE), "Firefox — Other")
 
 
 if __name__ == "__main__":

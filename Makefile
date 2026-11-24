@@ -1,6 +1,6 @@
 VERSION := $(shell python3 -c "import json;print(json.load(open('extension/manifest.json'))['version'])")
 
-.PHONY: build test e2e memory lint xpi install-host clean
+.PHONY: build test test-js e2e memory lint xpi install-host clean
 
 build:
 	cd host && cargo build --release --locked
@@ -16,7 +16,11 @@ e2e: build
 memory:
 	python3 tests/e2e/memory.py base && python3 tests/e2e/memory.py ext
 
-lint:
+# The ignore-list rules, without a browser
+test-js:
+	node --test tests/js/*.test.mjs
+
+lint: test-js
 	cd extension && npx --yes web-ext lint
 
 # An unsigned package, for review uploads or signing; Firefox release only installs it once Mozilla has signed it

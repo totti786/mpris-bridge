@@ -12,6 +12,8 @@
     }, window);
   } catch (e) {}
 
+  const hasSession = () => { try { return !!navigator.mediaSession.metadata; } catch (e) { return false; } };
+
   let lastPlayed = null;
   const note = e => {
     if (e.target instanceof HTMLMediaElement) lastPlayed = e.target;
@@ -23,7 +25,8 @@
 
   function isMedia(el) {
     const d = el.duration;
-    if (el.muted && el.loop) return false;                        // a looping background video
+    // A silent background video: looping, or muted with no controls and no track of its own
+    if (el.muted && (el.loop || (!el.controls && !hasSession()))) return false;
     if (!el.currentSrc && !el.src && el.readyState === 0) return false;
     if (isFinite(d) && d < 2) return false;                       // a sound effect or a preview
     return true;
@@ -69,12 +72,52 @@
   let lastAt = 0;
   let gone = true;
   let timer = 0;
+  let ticker = 0;
+
+  // The ignore list is matched against the frame's own site here, and against the whole tab by the
+  // background page (it can see the top-level URL; a frame cannot). Either one silences this frame.
+  let ownIgnored = null;  // null until storage has been read
+  let tabIgnored = false;
+  let frozen = false;     // pagehide fired (navigation, bfcache, iframe going away)
+  let wanted = false;     // a media event asked for a report
+
+  const active = () => ownIgnored === false && !tabIgnored && !frozen;
+
+  function send(msg) {
+    browser.runtime.sendMessage(msg).catch(() => {});
+  }
+
+  function stopReporting(clean) {
+    clearTimeout(timer); timer = 0;
+    clearInterval(ticker); ticker = 0;
+    if (clean && !gone) { gone = true; last = ""; send({ gone: true }); }
+  }
+
+  function applyIgnore() {
+    if (ownIgnored === null) return;
+    if (ownIgnored || tabIgnored) stopReporting(true);
+    else if (wanted) schedule();
+  }
+
+  try {
+    MprisIgnore.load().then(
+      list => { ownIgnored = MprisIgnore.matches(location.href, list); applyIgnore(); },
+      () => { ownIgnored = false; applyIgnore(); });
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !changes.ignored) return;
+      ownIgnored = MprisIgnore.matches(location.href, changes.ignored.newValue || []);
+      applyIgnore();
+    });
+  } catch (e) {
+    ownIgnored = false;
+  }
 
   function report() {
     timer = 0;
+    if (!active()) return;
     const el = pickMedia();
     if (!el) {
-      if (!gone) { gone = true; last = ""; browser.runtime.sendMessage({ gone: true }); }
+      if (!gone) { gone = true; last = ""; send({ gone: true }); }
       clearInterval(ticker);
       ticker = 0;
       return;
@@ -101,15 +144,16 @@
     if (key !== last || now - lastAt > 5000) {
       last = key;
       lastAt = now;
-      browser.runtime.sendMessage(state);
+      send(state);
     }
   }
 
   // A page with no media does no work at all: the once-a-second poll (which catches metadata a page
   // changes without any media event, such as a single-page app moving to the next track) only runs
   // while the page has media, and the next media event starts it again.
-  let ticker = 0;
   function schedule() {
+    wanted = true;
+    if (!active()) return;
     if (!timer) timer = setTimeout(report, 150);
     if (!ticker) ticker = setInterval(schedule, 1000);
   }
@@ -122,13 +166,24 @@
   }
 
   browser.runtime.onMessage.addListener(msg => {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.cmd === "Ignore") {
+      tabIgnored = !!msg.value;
+      applyIgnore();
+      return;
+    }
     const el = pickMedia();
     const play = () => { const r = el.play(); if (r && r.catch) r.catch(() => {}); };  // a page may refuse; that is not an error here
     switch (msg.cmd) {
       case "Play": if (!call("play") && el) play(); break;
       case "Pause": if (!call("pause") && el) el.pause(); break;
       case "PlayPause": if (el) { if (el.paused) { if (!call("play")) play(); } else if (!call("pause")) el.pause(); } break;
-      case "Stop": if (!call("stop") && el) el.pause(); break;
+      case "Stop":
+        if (!call("stop") && el) {
+          el.pause();
+          if (isFinite(el.duration)) el.currentTime = 0;
+        }
+        break;
       case "Next": if (!call("nexttrack")) { const b = document.querySelector(".ytp-next-button"); if (b) b.click(); } break;
       case "Previous": if (!call("previoustrack")) { const b = document.querySelector(".ytp-prev-button"); if (b) b.click(); } break;
       case "Seek": if (el && isFinite(el.duration)) el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + msg.value / 1e6)); break;
@@ -138,4 +193,9 @@
     }
     schedule();
   });
+
+  // A document that is navigated away or put in the bfcache says so, so its player goes at once rather
+  // than waiting for the background page's staleness sweep (a removed iframe has no event at all).
+  addEventListener("pagehide", () => { frozen = true; stopReporting(true); });
+  addEventListener("pageshow", () => { frozen = false; if (wanted) schedule(); });
 })();

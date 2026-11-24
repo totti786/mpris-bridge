@@ -47,11 +47,23 @@ Start something playing in a tab and run `playerctl -l`. A `firefox_bridge.p…t
 - One player per tab. They appear when a tab starts playing and go away when it closes or navigates.
 - A tab that is stalled waiting for data reports itself as paused, so a progress bar stops along with the picture.
 - A new track gets a new track id, even on sites that keep reusing one.
+- Each player is named after its tab in panels, rather than several identical "Firefox" entries.
+- A toolbar button ignores the site you are on, and an options page keeps the list. Ignored sites (and their subdomains) publish nothing.
+
+## Ignoring a site
+
+Start something playing, click the MPRIS Bridge button in the toolbar and choose "Ignore this site". The button shows
+"Stop ignoring this site" on a site that is already ignored. The link in the popup opens the list, where sites can be
+removed or added by hand (`example.com` also covers `music.example.com`).
+
+Ignoring only stops the player from appearing on the desktop; the page itself keeps playing. The list is stored in the
+extension's local storage and is never sent anywhere.
 
 ## Things to know
 
 - Firefox keeps publishing its own player too, so anything that lists every player will show two. Filter out the bus names starting with `org.mpris.MediaPlayer2.firefox.instance` when a `firefox_bridge` player exists.
 - Private windows are ignored on purpose.
+- A frame that is navigated away loses its player at once. A frame that is removed from the page without any event is noticed within about 20 seconds, so its player can linger that long.
 - Chromium-based browsers aren't supported. They would need a different manifest and a way to hook the page's media session without Firefox's `exportFunction`.
 - It is Linux only, since it speaks D-Bus.
 

@@ -13,5 +13,14 @@ m.addEventListener('seeked', () => log('seeked', Math.round(m.currentTime)));
 m.addEventListener('volumechange', () => log('volume', m.volume.toFixed(2)));
 m.addEventListener('ratechange', () => log('rate', m.playbackRate));
 window.next = () => { navigator.mediaSession.metadata = new MediaMetadata({title: 'Tone B', artist: 'Artist B'}); };
+// The test runner asks for changes through this; the page applies them itself, as a single-page app would.
+async function poll() {
+  try {
+    const r = await fetch('/cmd?who=tone', { cache: 'no-store' });
+    if (r.status === 200 && (await r.text()) === 'next') window.next();
+  } catch (e) {}
+  setTimeout(poll, 300);
+}
+poll();
 m.play().then(() => log('playing'), e => log('blocked', e.name));
 </script>

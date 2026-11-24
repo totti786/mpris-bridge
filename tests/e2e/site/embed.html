@@ -1,0 +1,8 @@
+<!doctype html>
+<title>Embed</title>
+<audio id="m" src="/tone.ogg" loop></audio>
+<script>
+// The title comes from the embedding page so two iframe players can be told apart.
+document.title = new URLSearchParams(location.search).get('t') || 'Embed';
+document.getElementById('m').play().catch(() => {});
+</script>
